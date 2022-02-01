@@ -1,60 +1,172 @@
 ﻿@page "/"
 
 @using System.Text.RegularExpressions
+@using System.Globalization
 
 <InputFile OnChange="@LoadFiles" multiple />
 
+<MudProgressLinear Color="Color.Primary" Value="@ValueLine" Class="my-7" />
+
+<MudList Clickable="true">
+    @foreach (var item in IpList)
+    {
+    <MudListItem OnClick="() => OnClickItem(item)">@item.Ip (@item.Count) @item.DateStart.ToString("HH:mm:ss") - @item.DateLast.ToString("HH:mm:ss")</MudListItem>
+    }
+</MudList>
+
+<MudPopover Open="@_isOpen">
+    <MudButton OnClick="() => {_isOpen=false;}" Class="ml-auto mr-n3 mb-1" Color="Color.Error">Закрыть</MudButton>
+	<div class="d-flex flex-column pa-1">
+		<MudText>@SelectedElement.Ip</MudText>
+        @foreach (var item in @SelectedElement.Urls)
+        {
+            <MudText>@item.Date - @item.Path</MudText>
+        }
+    </div>
+</MudPopover>
+
+<MudChart ChartType="ChartType.Line" ChartSeries="@Series" @bind-SelectedIndex="index" XAxisLabels="@XAxisLabels" Width="100%" Height="350px"></MudChart>
+
 @code {
+    private int index = -1;
+    private List<ChartSeries> Series = new List<ChartSeries>();
+    private string[] XAxisLabels = { };
+    private List<FreqIp> IpList = new List<FreqIp>();
+
+    private bool _isOpen { get; set; }
+    private int ValueLine { get; set; }
+    private FreqIp SelectedElement { get; set; }
 
     private async Task LoadFiles(InputFileChangeEventArgs e)
     {
         foreach (var file in e.GetMultipleFiles())
         {
+            var listData = new List<LogElement>();
+
             try
             {
-                //var stream = file.OpenReadStream(100000000);
-                //var line = await new StreamReader(file.OpenReadStream(100000000)).ReadLineAsync();
-                using (var reader = new StreamReader(file.OpenReadStream(100000000)))
+                var ips = new List<FreqIp>();
+
+                using (var reader = new StreamReader(file.OpenReadStream(110000000)))
                 {
-                    var line = "";
+                    long countLines = reader.BaseStream.Length / 270;
+
+                    var line = ""; long counter = 0;
                     while (line != null) //await reader.ReadLineAsync() != null
                     {
                         line = await reader.ReadLineAsync();
 
-                        //var pattern = @"(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}(?:\W+)(\d{2}|\d{4})/(\d{2}|\w{3})/(\d{2}|\d{4})(?:\:|\s+)[0-9]{2}:[0-9]{2}:[0-9]{2}(?:.+?)(POST|GET|HEAD|PUT|OPTION))";
-                        var pattern = @"([0-9]+\.[0-9]+\.[0-9]+\.[0-9]+) - - \[(\d{2}\/\w{3}\/\d{4}:\d{2}:\d{2}:\d{2} \+\d{4})\]";
-
-                        Regex regex = new Regex(pattern);
-                        MatchCollection matches = regex.Matches(line);
-                        if (matches.Count > 0)
+                        if (!string.IsNullOrEmpty(line))
                         {
-                            foreach (Match match in matches)
-                            {
-                                if (match.Groups?.Count > 0)
-                                {
-                                    var ip = match.Groups[1].ToString();
-                                    var date_str = match.Groups[2].ToString();
-                                    var newDate_str = date_str.Remove(date_str.IndexOf(':'), 1).Insert(date_str.IndexOf(':'), " ");
-                                    var date = DateTime.Parse(newDate_str);
-                                    /*foreach (var group in match.Groups)
-                                    {
-                                        Console.WriteLine(group.ToString());
-                                    }*/
+                            counter++;
 
+                            //var pattern = @"(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}(?:\W+)(\d{2}|\d{4})/(\d{2}|\w{3})/(\d{2}|\d{4})(?:\:|\s+)[0-9]{2}:[0-9]{2}:[0-9]{2}(?:.+?)(POST|GET|HEAD|PUT|OPTION))";
+                            var pattern = @"([0-9]+\.[0-9]+\.[0-9]+\.[0-9]+) - - \[(\d{2}\/\w{3}\/\d{4}:\d{2}:\d{2}:\d{2} \+\d{4})\] ""(POST|GET|HEAD|PUT|OPTION) (.+) HTTP.+";
+
+                            Regex regex = new Regex(pattern);
+                            MatchCollection matches = regex.Matches(line);
+                            if (matches.Count > 0)
+                            {
+                                foreach (Match match in matches)
+                                {
+                                    if (match.Groups?.Count > 0)
+                                    {
+                                        var ip = match.Groups[1].ToString();
+                                        var date_str = match.Groups[2].ToString();
+                                        var url = match.Groups?.Count >= 5 ? match.Groups[4].ToString() : "";
+                                        var index = date_str.IndexOf(':');
+                                        var newDate_str = date_str.Remove(index, 1).Insert(index, " ");
+                                        var date = DateTime.Parse(newDate_str);
+
+                                        var findIp = ips.FirstOrDefault(x => x.Ip == ip);
+                                        if (findIp != null)
+                                            if (findIp.DateLast.AddSeconds(10) >= date)
+                                            {
+                                                findIp.Count++;
+                                                findIp.DateLast = date;
+                                                findIp.Urls.Add(new FreqIp.Url{Date=date, Path=url});
+                                            }
+                                            else 
+                                            {
+                                                findIp.Count = 1;
+                                                findIp.DateStart = date;
+                                                findIp.DateLast = date;
+                                                findIp.Urls = new List<FreqIp.Url> { new FreqIp.Url { Date = date, Path = url } };
+                                            }
+                                        else ips.Add(new FreqIp { Ip = ip, DateStart = date, DateLast = date, Count = 1, Urls = new List<FreqIp.Url> { new FreqIp.Url { Date = date, Path = url } } });
+
+                                        listData.Add(new LogElement { Date=date, Ip=ip });
+                                    }
                                 }
                             }
-                        }
-                        else
-                        {
-                            Console.WriteLine("Совпадений не найдено");
+                            else
+                            {
+                                Console.WriteLine("Совпадений не найдено");
+                            }
+
+                            var valueLine = (int)(counter * 100 / countLines);
+                            ValueLine = valueLine > 100 ? 100 : valueLine;
+                            StateHasChanged();
                         }
                     }
                 }
+
+                // yyyyMMdd HH:mm:ss
+                var res = listData.GroupBy(x => x.Date.ToString("yyyyMMdd HH:mm")).Select(x => new DiagramElement
+                {
+                    Date = DateTime.ParseExact(x.Key, "yyyyMMdd HH:mm", CultureInfo.InvariantCulture, DateTimeStyles.None),
+                    Count = x.Count()
+                }).ToList();
+
+                XAxisLabels = res.Select(x => x.Date.ToString("HH:mm")).ToArray<string>();
+
+                var yAxisData = res.Select(x => (double)x.Count).ToArray<double>();
+                var series = new ChartSeries() { Name = "Series 1", Data = yAxisData };
+                Series = new List<ChartSeries> { series };
+
+                IpList = ips.Where(x => x.Count > 15).OrderBy(x => x.Count).ThenBy(x => x.DateLast).ToList();
+
+                StateHasChanged();
+
             }
             catch (Exception ex)
             {
                 Console.WriteLine(ex.Message);
             }
         }        
+    }
+
+    private void OnClickItem(FreqIp value)
+    {
+        SelectedElement = (FreqIp)value;
+        _isOpen = true;
+    }
+
+    private class LogElement
+    {
+        public DateTime Date { get; set; }
+        public string Ip { get; set; }
+    }
+
+    private class DiagramElement
+    {
+        public DateTime Date { get; set; }
+        public int Count { get; set; }
+    }
+
+    private class FreqIp
+    {
+        public DateTime DateStart { get; set; }
+        public DateTime DateLast { get; set; }
+        public string Ip { get; set; }
+        public int Count { get; set; }
+        //public IDictionary<DateTime, string> Urls { get; set; }
+        public List<Url> Urls { get; set; }
+
+        public class Url
+        {
+            public DateTime Date { get; set; }
+            public string Path { get; set; }
+        }
     }
 }
